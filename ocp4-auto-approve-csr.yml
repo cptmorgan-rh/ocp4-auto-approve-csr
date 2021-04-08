@@ -1,0 +1,52 @@
+kind: ConfigMap
+apiVersion: v1
+metadata:
+  name: ocp4-auto-approve-csr-script
+  namespace: openshift-csr-autoapprove
+data:
+  auto-approve-csr.sh: |
+    #!/bin/sh
+    oc login --token=$(cat /var/run/secrets/kubernetes.io/serviceaccount/token) https://$KUBERNETES_SERVICE_HOST:$KUBERNETES_SERVICE_PORT --insecure-skip-tls-verify
+    if $(oc get csr --no-headers | grep Pending > /dev/null 2>&1); then
+        #Approve kube-apiserver-client-kubelet
+        oc get csr --no-headers | awk '{ if ($5 ~ "Pending") system ("oc adm certificate approve " $1)}'
+        #Wait 5 seconds for second certificate
+        sleep 30
+        #Approve kubelet-serving certificate
+        oc get csr --no-headers | awk '{ if ($5 ~ "Pending") system ("oc adm certificate approve " $1)}'
+    else
+        echo "No CSRs found, nothing to do!"
+    fi
+---
+kind: CronJob
+apiVersion: batch/v1beta1
+metadata:
+  name: ocp4-auto-approve-csr
+  namespace: openshift-csr-autoapprove
+spec:
+  schedule: '@hourly'
+  concurrencyPolicy: Allow
+  suspend: false
+  jobTemplate:
+    spec:
+      template:
+        spec:
+          volumes:
+          - name: script
+            configMap:
+              name: ocp4-auto-approve-csr-script
+          containers:
+            - name: csr-autoprove
+              image: quay.io/openshift/origin-cli:4.7
+              volumeMounts:
+                - name: script
+                  mountPath: /usr/autoprove-csr
+              command:
+              - /bin/sh
+              - /usr/autoprove-csr/auto-approve-csr.sh
+              imagePullPolicy: IfNotPresent
+          restartPolicy: OnFailure
+          terminationGracePeriodSeconds: 30
+          dnsPolicy: ClusterFirst
+          securityContext: {}
+          schedulerName: default-scheduler
